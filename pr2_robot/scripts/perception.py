@@ -16,6 +16,7 @@ from sensor_stick.pcl_helper import *
 
 import rospy
 import tf
+from sensor_msgs.msg import JointState
 from geometry_msgs.msg import Pose
 from std_msgs.msg import Float64
 from std_msgs.msg import Int32
@@ -23,7 +24,7 @@ from std_msgs.msg import String
 from pr2_robot.srv import *
 from rospy_message_converter import message_converter
 import yaml
-
+import math
 
 # Helper function to get surface normals
 def get_normals(cloud):
@@ -51,8 +52,14 @@ def pcl_callback(pcl_msg):
     # Convert ROS msg to PCL data
     cloud = ros_to_pcl(pcl_msg)
 
+    # Outlier Removal Filter
+    outlier_filter = cloud.make_statistical_outlier_filter()
+    outlier_filter.set_mean_k(50)
+    outlier_filter.set_std_dev_mul_thresh(0.5)
+    cloud_filtered = outlier_filter.filter()
+
     # Voxel Grid Downsampling
-    vox = cloud.make_voxel_grid_filter()
+    vox = cloud_filtered.make_voxel_grid_filter()
     LEAF_SIZE = 0.005
     vox.set_leaf_size(LEAF_SIZE, LEAF_SIZE, LEAF_SIZE)
     cloud_filtered = vox.filter()
@@ -68,11 +75,6 @@ def pcl_callback(pcl_msg):
     y_passthrough.set_filter_limits(-0.45, 0.45)
     cloud_filtered = y_passthrough.filter()
 
-    # Outlier Removal Filter
-    outlier_filter = cloud_filtered.make_statistical_outlier_filter()
-    outlier_filter.set_mean_k(50)
-    outlier_filter.set_std_dev_mul_thresh(0.5)
-    cloud_filtered = outlier_filter.filter()
 
     # RANSAC Plane Segmentation
     seg = cloud_filtered.make_segmenter()
@@ -154,12 +156,63 @@ def pcl_callback(pcl_msg):
     # Could add some logic to determine whether or not your object detections are robust
     # before calling pr2_mover()
     try:
-        pr2_mover(detected_objects_list)
+        pr2_mover(detected_objects_list, cloud_table)
     except rospy.ROSInterruptException:
         pass
 
+def collision_avoidance(initial_idx, object_list, table, left_table, right_table):
+    point_list = list()
+    # Add other objects
+    for idx in range(initial_idx+1, len(object_list), 1):
+        cloud = ros_to_pcl(object_list[idx].cloud)
+        point_list.extend(cloud)
+
+    # Add the table
+    point_list.extend(table)
+    point_list.extend(left_table)
+    point_list.extend(right_table)
+
+    # Create obstacle point cloud
+    pcl_cloud = pcl.PointCloud_PointXYZRGB()
+    pcl_cloud.from_list(point_list)
+    return pcl_to_ros(pcl_cloud)
+
+def move(goal):
+    tolerance = 0.05
+    time_elapsed = rospy.Time.now()
+    motion_pub.publish(goal) 
+
+    while True:
+        joint_state = rospy.wait_for_message("/pr2/joint_states", JointState)
+        num_joints = len(joint_state.position)
+        pos = joint_state.position[num_joints-1]
+        at_goal =  abs(pos - goal) <= tolerance
+
+        if at_goal:
+            time_elapsed = joint_state.header.stamp - time_elapsed
+            return time_elapsed
+
+"""
+def find_table():
+    pcl_msg = rospy.wait_for_message("/pr2/world/points", pc2.PointCloud2)
+    cloud = ros_to_pcl(pcl_msg)
+
+    # RANSAC Plane Segmentation
+    seg = cloud_filtered.make_segmenter()
+    seg.set_model_type(pcl.SACMODEL_PLANE)
+    seg.set_method_type(pcl.SAC_RANSAC)
+    max_distance = 0.025
+    seg.set_distance_threshold(max_distance)
+    inliers, coefficients = seg.segment()
+
+    # Extract inliers and outliers
+    cloud_table = cloud_filtered.extract(inliers, negative=False)
+    cloud_other = cloud_filtered.extract(inliers, negative=True)
+    return cloud_table
+"""
+
 # function to load parameters and request PickPlace service
-def pr2_mover(object_list):
+def pr2_mover(object_list, table):
     # Get/Read parameters
     object_list_param = rospy.get_param('/object_list')
     dropbox_param = rospy.get_param('/dropbox')
@@ -177,17 +230,35 @@ def pr2_mover(object_list):
     test_scene_num = Int32()
     test_scene_num.data = 1
 
-    # TODO: Rotate PR2 in place to capture side tables for the collision map
+    # Constant: Rotation Positions
+    right_pos = -math.pi/2
+    center_pos = 0
+    left_pos = math.pi/2
+
+    # Rotate PR2 in place to capture side tables for the collision map
+    """
+    move(right_pos)
+    right_table = find_table()
+    move(center_pos)
+
+    move(left_pos)
+    left_table = find_table()
+    move(center_pos)
+    """
 
     dict_list = list()
     # Loop through the pick list
     for idx in range(len(object_list_param)):
         object_name = String()
         object_name.data = object_list_param[idx]['name']
+        object_group = object_list_param[idx]['group']
 
         if object_name.data not in centroids:
             rospy.loginfo("Failed to detect object in scene! Expected: {0}".format(object_name.data))
             continue
+
+        avoid_cloud = collision_avoidance(idx, object_list, table, right_table, left_table)
+        collision_pub.publish(avoid_cloud) 
 
         # Get the PointCloud for a given object and obtain it's centroid
         pick_pose = Pose()
@@ -197,7 +268,6 @@ def pr2_mover(object_list):
         pick_pose.position.z = float(centroid[2])
 
         # Assign the arm to be used for pick_place
-        object_group = object_list_param[idx]['group']
         arm_name = String()
         arm_name.data = "right" if object_group == "green" else "left"
 
@@ -236,12 +306,23 @@ if __name__ == '__main__':
     rospy.init_node("perception", anonymous=True)
 
     # Create Subscribers
-    pcl_sub = rospy.Subscriber("/pr2/world/points", pc2.PointCloud2, pcl_callback, queue_size=1)
+    pcl_sub = rospy.Subscriber("/pr2/world/points", pc2.PointCloud2, pcl_callback, queue_size=10)
 
     # Create Publishers
+    # Display Filtered Point Cloud
     pcl_pub = rospy.Publisher("/pcl", pc2.PointCloud2, queue_size=1)
+
+    # Display Object Labels
     object_markers_pub = rospy.Publisher("/objects_markers", Marker, queue_size=1)
+
+    # Display which objects are visible
     detected_objects_pub = rospy.Publisher("/detected_objects", DetectedObjectsArray, queue_size=1)
+
+    # Pass objects for collision avoidance
+    collision_pub = rospy.Publisher("/pr2/3d_map/points", pc2.PointCloud2, queue_size=1)
+
+    # Rotate the base of the PR2 robot
+    motion_pub = rospy.Publisher("/pr2/world_joint_controller/command", Float64, queue_size=10)
 
     # Load Model From disk
     with open("model.sav", "rb") as f:
