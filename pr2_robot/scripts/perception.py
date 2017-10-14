@@ -160,7 +160,7 @@ def pcl_callback(pcl_msg):
     except rospy.ROSInterruptException:
         pass
 
-def collision_avoidance(initial_idx, object_list, table, left_table, right_table):
+def collision_avoidance(initial_idx, object_list, table):
     point_list = list()
     # Add other objects
     for idx in range(initial_idx+1, len(object_list), 1):
@@ -169,8 +169,8 @@ def collision_avoidance(initial_idx, object_list, table, left_table, right_table
 
     # Add the table
     point_list.extend(table)
-    point_list.extend(left_table)
-    point_list.extend(right_table)
+    #point_list.extend(left_table)
+    #point_list.extend(right_table)
 
     # Create obstacle point cloud
     pcl_cloud = pcl.PointCloud_PointXYZRGB()
@@ -257,7 +257,7 @@ def pr2_mover(object_list, table):
             rospy.loginfo("Failed to detect object in scene! Expected: {0}".format(object_name.data))
             continue
 
-        avoid_cloud = collision_avoidance(idx, object_list, table, right_table, left_table)
+        avoid_cloud = collision_avoidance(idx, object_list, table)
         collision_pub.publish(avoid_cloud) 
 
         # Get the PointCloud for a given object and obtain it's centroid
@@ -292,12 +292,11 @@ def pr2_mover(object_list, table):
             resp = pick_place_routine(test_scene_num, object_name, arm_name, pick_pose, place_pose)
 
             print ("Response: ",resp.success)
-
         except rospy.ServiceException, e:
             print "Service call failed: %s"%e
 
     # Output your request parameters into output yaml file
-    send_to_yaml("test{0}.yaml".format(test_scene_num.data), dict_list)
+    send_to_yaml("test.yaml".format(test_scene_num.data), dict_list)
 
 
 if __name__ == '__main__':
@@ -327,6 +326,7 @@ if __name__ == '__main__':
     # Load Model From disk
     with open("model.sav", "rb") as f:
         model = pickle.load(f)
+
     clf = model['classifier']
     encoder = LabelEncoder()
     encoder.classes_ = model['classes']
