@@ -1,23 +1,24 @@
 ## [Rubric](https://review.udacity.com/#!/rubrics/1067/view)
-
+Here is my writeup for the Udacity RoboND Perception Project.
 ---
 ### README
+The code for the perception pipeline and training the SVM are located in the "results" folder, along with the output yaml files.
 
 #### 1. Filtering and RANSAC plane fitting
-[pcl_viewer](./results/images/pcl_viewer.png)
+![pcl_viewer](./results/images/pcl_viewer.png)
 
 #### 2. Clustering for Segmentation 
-[segmentation](./results/images/segmentation.png)
+![segmentation](./results/images/segmentation.png)
 
 #### 3. Object Recognition - Extract features and Trained SVM
-[svm_training](./results/images/SVM_Training.png)
+![svm_training](./results/images/SVM_Training.png)
 
-[obj_recognition](./results/images/object_recognition.png)
+![obj_recognition](./results/images/object_recognition.png)
 
 #### 4. Pick and Place Demo
-[world3](./results/images/test_world_3.png)
+![world3](./results/images/test_world_3.png)
 
-[world3_demo](./results/images/test_world_3_demo.png)
+![world3_demo](./results/images/test_world_3_demo.png)
 
 # How did I train the SVM?
 Instead of only gather features for the objects in the pick and place worlds, I gathered features for all 16 objects.
